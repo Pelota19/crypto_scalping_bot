@@ -62,7 +62,7 @@ class BotRunner:
             with open(self._pidfile, "w") as f:
                 f.write(str(os.getpid()))
         except Exception as e:
-            logger.warning(f"No se pudo escribir PID: {{e}}")
+            logger.warning(f"No se pudo escribir PID: {e}")
 
     def _remove_pid(self):
         try:
@@ -73,7 +73,7 @@ class BotRunner:
 
     def _setup_signals(self):
         def handler(signum, frame):
-            logger.info(f"Recibida señal {{signum}}, cerrando...")
+            logger.info(f"Recibida señal {signum}, cerrando...")
             self._stop.set()
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, handler)
@@ -87,7 +87,7 @@ class BotRunner:
                 try:
                     self.notifier.heartbeat()
                 except Exception as e:
-                    logger.warning(f"Heartbeat error: {{e}}")
+                    logger.warning(f"Heartbeat error: {e}")
                 next_ping = now + interval
             self._stop.wait(5)
 
@@ -95,7 +95,7 @@ class BotRunner:
         if symbol not in self.precisions:
             amt_dec, prc_dec = self.ex.get_symbol_precisions(symbol)
             self.precisions[symbol] = (amt_dec, prc_dec)
-            logger.info(f"[{{symbol}}] precisión: amount_decimals={{amt_dec}}, price_decimals={{prc_dec}}")
+            logger.info(f"[{symbol}] precisión: amount_decimals={amt_dec}, price_decimals={prc_dec}")
 
     def _handle_position(self, symbol: str, last_price: float):
         pos = self.positions[symbol]
@@ -105,24 +105,24 @@ class BotRunner:
             if pos.tp and last_price >= pos.tp:
                 self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "long", pos.qty, last_price, "take-profit")
-                logger.info(f"[{{symbol}}] TP long alcanzado a {{last_price}}")
+                logger.info(f"[{symbol}] TP long alcanzado a {last_price}")
                 pos.close()
             elif pos.sl and last_price <= pos.sl:
                 self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "long", pos.qty, last_price, "stop-loss")
-                logger.info(f"[{{symbol}}] SL long alcanzado a {{last_price}}")
+                logger.info(f"[{symbol}] SL long alcanzado a {last_price}")
                 pos.close()
 
         elif pos.side == "short":
             if pos.tp and last_price <= pos.tp:
                 self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "short", pos.qty, last_price, "take-profit")
-                logger.info(f"[{{symbol}}] TP short alcanzado a {{last_price}}")
+                logger.info(f"[{symbol}] TP short alcanzado a {last_price}")
                 pos.close()
             elif pos.sl and last_price >= pos.sl:
                 self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "short", pos.qty, last_price, "stop-loss")
-                logger.info(f"[{{symbol}}] SL short alcanzado a {{last_price}}")
+                logger.info(f"[{symbol}] SL short alcanzado a {last_price}")
                 pos.close()
 
     def _maybe_enter(self, symbol: str, sig: Optional[str], last_price: float):
@@ -135,7 +135,7 @@ class BotRunner:
                 if pos.side == "short":
                     self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                     self.notifier.trade_close(symbol, "short", pos.qty, last_price, "señal contraria")
-                    logger.info(f"[{{symbol}}] Cerramos short por señal contraria a {{last_price}}")
+                    logger.info(f"[{symbol}] Cerramos short por señal contraria a {last_price}")
                     pos.close()
             else:
                 qty = compute_futures_order_qty_usdt(self.cfg.max_notional_usdt, last_price, self.cfg.leverage, amt_dec)
@@ -146,14 +146,14 @@ class BotRunner:
                     sl = round(entry * (1 - self.cfg.sl_pct), prc_dec)
                     pos.open("long", entry, qty, tp, sl)
                     self.notifier.trade_open(symbol, "long", qty, entry, tp, sl)
-                    logger.info(f"[{{symbol}}] Abrimos long: qty={{qty}} entry={{entry}} tp={{tp}} sl={{sl}}")
+                    logger.info(f"[{symbol}] Abrimos long: qty={qty} entry={entry} tp={tp} sl={sl}")
 
         elif sig == "sell":
             if pos.is_open():
                 if pos.side == "long":
                     self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                     self.notifier.trade_close(symbol, "long", pos.qty, last_price, "señal contraria")
-                    logger.info(f"[{{symbol}}] Cerramos long por señal contraria a {{last_price}}")
+                    logger.info(f"[{symbol}] Cerramos long por señal contraria a {last_price}")
                     pos.close()
             else:
                 qty = compute_futures_order_qty_usdt(self.cfg.max_notional_usdt, last_price, self.cfg.leverage, amt_dec)
@@ -164,7 +164,7 @@ class BotRunner:
                     sl = round(entry * (1 + self.cfg.sl_pct), prc_dec)
                     pos.open("short", entry, qty, tp, sl)
                     self.notifier.trade_open(symbol, "short", qty, entry, tp, sl)
-                    logger.info(f"[{{symbol}}] Abrimos short: qty={{qty}} entry={{entry}} tp={{tp}} sl={{sl}}")
+                    logger.info(f"[{symbol}] Abrimos short: qty={qty} entry={entry} tp={tp} sl={sl}")
 
     def _trading_loop(self):
         poll = max(2, self.cfg.poll_interval_seconds)
@@ -186,8 +186,8 @@ class BotRunner:
                     self._maybe_enter(symbol, sig, last_price)
 
                 except Exception as e:
-                    logger.warning(f"[{{symbol}}] Error en loop: {{e}}")
-                    self.notifier.error(f"{{symbol}}: {{e}}")
+                    logger.warning(f"[{symbol}] Error en loop: {e}")
+                    self.notifier.error(f"{symbol}: {e}")
                     time.sleep(1)  # backoff ligero por símbolo
 
             # Espera hasta completar el intervalo de polling
