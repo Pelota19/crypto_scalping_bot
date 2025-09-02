@@ -20,4 +20,4 @@ if [ ! -f ".env" ]; then
   echo "Edita .env con tus claves antes de ejecutar el bot."
 fi
 
-python main.py
+python bot.py

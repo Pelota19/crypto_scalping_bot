@@ -20,7 +20,7 @@ if [ -f "$PIDFILE" ]; then
 else
   # Fallback por si no hay pidfile
   echo "No hay .run/bot.pid, intentando pkill..."
-  pkill -f "python main.py" || true
+  pkill -f "python bot.py" || true
 fi
 
 echo "Stop completo."
