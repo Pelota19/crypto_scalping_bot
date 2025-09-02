@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 import ccxt
 
 from .logger import get_logger
@@ -8,9 +8,11 @@ from .config import Config
 logger = get_logger("exchange")
 
 class ExchangeClient:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, database=None):
         self.cfg = cfg
+        self.database = database
         self.exchange = self._build_exchange()
+        self._last_ohlcv_fetch = {}  # Track last fetch time per symbol/timeframe
 
     def _build_exchange(self):
         ex_name = self.cfg.exchange.lower()
@@ -83,9 +85,32 @@ class ExchangeClient:
         raise RuntimeError("No se pudo obtener el precio tras varios intentos.")
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> List[List[Any]]:
+        # Try to use cached data first
+        if self.database:
+            cache_key = f"{symbol}_{timeframe}"
+            now = time.time()
+            
+            # Only fetch from API if enough time has passed (reduce rate limit pressure)
+            min_interval = self._get_min_fetch_interval(timeframe)
+            last_fetch = self._last_ohlcv_fetch.get(cache_key, 0)
+            
+            if now - last_fetch < min_interval:
+                cached_data = self.database.get_cached_ohlcv(symbol, timeframe, limit, max_age_seconds=min_interval * 2)
+                if cached_data:
+                    logger.debug(f"Using cached OHLCV for {symbol} {timeframe}")
+                    return cached_data
+        
+        # Fetch from API
         for attempt in range(3):
             try:
-                return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                data = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+                
+                # Cache the data
+                if self.database:
+                    self.database.cache_ohlcv(symbol, timeframe, data)
+                    self._last_ohlcv_fetch[cache_key] = time.time()
+                
+                return data
             except ccxt.NetworkError as e:
                 logger.warning(f"Network error fetch_ohlcv: {e}, intento {attempt+1}/3")
                 self.reconnect()
@@ -93,6 +118,18 @@ class ExchangeClient:
                 logger.warning(f"Error fetch_ohlcv: {e}, intento {attempt+1}/3")
                 time.sleep(1)
         raise RuntimeError("No se pudieron obtener OHLCV tras varios intentos.")
+    
+    def _get_min_fetch_interval(self, timeframe: str) -> int:
+        """Get minimum interval between API fetches based on timeframe."""
+        timeframe_seconds = {
+            "1m": 30,   # Fetch at most every 30 seconds for 1m timeframe
+            "3m": 60,   # Fetch at most every 60 seconds for 3m timeframe
+            "5m": 120,  # Fetch at most every 2 minutes for 5m timeframe
+            "15m": 300, # Fetch at most every 5 minutes for 15m timeframe
+            "30m": 600, # Fetch at most every 10 minutes for 30m timeframe
+            "1h": 1200, # Fetch at most every 20 minutes for 1h timeframe
+        }
+        return timeframe_seconds.get(timeframe, 60)  # Default 1 minute
 
     def get_balance_usdt(self) -> float:
         try:

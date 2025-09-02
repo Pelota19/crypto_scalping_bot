@@ -5,5 +5,11 @@
 __pycache__/
 *.pyc
 
-# Archivos de log
+# Archivos de log y datos
 *.log
+logs/
+data/
+.run/
+
+# Temporales de test
+test_improvements.py

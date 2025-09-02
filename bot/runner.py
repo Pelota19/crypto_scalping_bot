@@ -10,6 +10,7 @@ from .logger import get_logger
 from .notifier import Notifier
 from .risk import compute_futures_order_qty_usdt
 from .strategy import SMAScalpingStrategy
+from .database import Database, PositionState, TradeRecord
 
 logger = get_logger("runner")
 
@@ -20,6 +21,7 @@ class Position:
         self.qty: float = 0.0
         self.tp: Optional[float] = None
         self.sl: Optional[float] = None
+        self.entry_time: Optional[float] = None
 
     def is_open(self) -> bool:
         return self.side is not None and self.qty > 0
@@ -30,6 +32,7 @@ class Position:
         self.qty = qty
         self.tp = tp
         self.sl = sl
+        self.entry_time = time.time()
 
     def close(self):
         self.side = None
@@ -37,11 +40,34 @@ class Position:
         self.qty = 0.0
         self.tp = None
         self.sl = None
+        self.entry_time = None
+    
+    def to_position_state(self, symbol: str) -> PositionState:
+        """Convert to database PositionState."""
+        return PositionState(
+            symbol=symbol,
+            side=self.side,
+            entry_price=self.entry_price,
+            qty=self.qty,
+            tp=self.tp,
+            sl=self.sl,
+            entry_time=self.entry_time
+        )
+    
+    def from_position_state(self, state: PositionState):
+        """Load from database PositionState."""
+        self.side = state.side
+        self.entry_price = state.entry_price
+        self.qty = state.qty
+        self.tp = state.tp
+        self.sl = state.sl
+        self.entry_time = state.entry_time
 
 class BotRunner:
     def __init__(self):
         self.cfg = Config.from_env()
-        self.ex = ExchangeClient(self.cfg)
+        self.database = Database()
+        self.ex = ExchangeClient(self.cfg, self.database)
         self.notifier = Notifier(self.cfg.telegram_token, self.cfg.telegram_chat_id)
         self.symbols = self.cfg.symbols
 
@@ -49,13 +75,59 @@ class BotRunner:
         self.strategies: Dict[str, SMAScalpingStrategy] = {
             s: SMAScalpingStrategy(self.cfg.fast_sma, self.cfg.slow_sma) for s in self.symbols
         }
-        self.positions: Dict[str, Position] = {s: Position() for s in self.symbols}
+        self.positions: Dict[str, Position] = {}
         self.precisions: Dict[str, Tuple[int, int]] = {}
+
+        # Load existing positions from database
+        self._load_positions()
 
         self.timeframe = self.cfg.timeframe
         self._stop = threading.Event()
         self._pidfile = ".run/bot.pid"
+        self._last_stats_report = 0
         os.makedirs(".run", exist_ok=True)
+    
+    def _load_positions(self):
+        """Load existing positions from database."""
+        self.positions = {}
+        for symbol in self.symbols:
+            position = Position()
+            saved_state = self.database.load_position(symbol)
+            if saved_state and saved_state.side:
+                position.from_position_state(saved_state)
+                logger.info(f"[{symbol}] Posición cargada: {saved_state.side} qty={saved_state.qty} entry={saved_state.entry_price}")
+            self.positions[symbol] = position
+    
+    def _save_position(self, symbol: str):
+        """Save position state to database."""
+        position = self.positions[symbol]
+        state = position.to_position_state(symbol)
+        self.database.save_position(state)
+    
+    def _save_trade_record(self, symbol: str, side: str, qty: float, entry_price: float, exit_price: float, entry_time: float, reason: str):
+        """Save completed trade to database."""
+        # Calculate P&L
+        if side == "long":
+            pnl_per_unit = exit_price - entry_price
+        else:  # short
+            pnl_per_unit = entry_price - exit_price
+        
+        pnl = pnl_per_unit * qty
+        
+        trade = TradeRecord(
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            entry_time=entry_time,
+            exit_time=time.time(),
+            reason=reason,
+            pnl=pnl
+        )
+        
+        self.database.save_trade(trade)
+        logger.info(f"[{symbol}] Trade guardado: {side} P&L={pnl:.4f} USDT ({reason})")
 
     def _write_pid(self):
         try:
@@ -86,10 +158,33 @@ class BotRunner:
             if now >= next_ping:
                 try:
                     self.notifier.heartbeat()
+                    # Report performance stats every 4 heartbeats (2 hours by default)
+                    if now - self._last_stats_report >= interval * 4:
+                        self._report_performance_stats()
+                        self._last_stats_report = now
                 except Exception as e:
                     logger.warning(f"Heartbeat error: {e}")
                 next_ping = now + interval
             self._stop.wait(5)
+    
+    def _report_performance_stats(self):
+        """Report performance statistics."""
+        try:
+            stats = self.database.get_performance_stats(days=7)  # Last 7 days
+            if stats['total_trades'] > 0:
+                msg = (
+                    f"📊 <b>Estadísticas últimos 7 días</b>\n"
+                    f"Trades: {stats['total_trades']} (✅{stats['winning_trades']} ❌{stats['losing_trades']})\n"
+                    f"Win Rate: {stats['win_rate']:.1f}%\n"
+                    f"P&L Total: {stats['total_pnl']:.4f} USDT\n"
+                    f"P&L Promedio: {stats['avg_pnl']:.4f} USDT\n"
+                    f"Mejor: +{stats['max_win']:.4f} USDT\n"
+                    f"Peor: {stats['max_loss']:.4f} USDT"
+                )
+                self.notifier.send(msg)
+                logger.info(f"Performance stats: {stats['total_trades']} trades, {stats['win_rate']:.1f}% win rate, {stats['total_pnl']:.4f} USDT P&L")
+        except Exception as e:
+            logger.warning(f"Error reporting performance stats: {e}")
 
     def _ensure_precisions(self, symbol: str):
         if symbol not in self.precisions:
@@ -101,29 +196,42 @@ class BotRunner:
         pos = self.positions[symbol]
         if not pos.is_open():
             return
+        
         if pos.side == "long":
             if pos.tp and last_price >= pos.tp:
                 self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "long", pos.qty, last_price, "take-profit")
                 logger.info(f"[{symbol}] TP long alcanzado a {last_price}")
+                # Save trade record before closing
+                self._save_trade_record(symbol, "long", pos.qty, pos.entry_price, last_price, pos.entry_time, "take-profit")
                 pos.close()
+                self._save_position(symbol)
             elif pos.sl and last_price <= pos.sl:
                 self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "long", pos.qty, last_price, "stop-loss")
                 logger.info(f"[{symbol}] SL long alcanzado a {last_price}")
+                # Save trade record before closing
+                self._save_trade_record(symbol, "long", pos.qty, pos.entry_price, last_price, pos.entry_time, "stop-loss")
                 pos.close()
+                self._save_position(symbol)
 
         elif pos.side == "short":
             if pos.tp and last_price <= pos.tp:
                 self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "short", pos.qty, last_price, "take-profit")
                 logger.info(f"[{symbol}] TP short alcanzado a {last_price}")
+                # Save trade record before closing
+                self._save_trade_record(symbol, "short", pos.qty, pos.entry_price, last_price, pos.entry_time, "take-profit")
                 pos.close()
+                self._save_position(symbol)
             elif pos.sl and last_price >= pos.sl:
                 self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                 self.notifier.trade_close(symbol, "short", pos.qty, last_price, "stop-loss")
                 logger.info(f"[{symbol}] SL short alcanzado a {last_price}")
+                # Save trade record before closing
+                self._save_trade_record(symbol, "short", pos.qty, pos.entry_price, last_price, pos.entry_time, "stop-loss")
                 pos.close()
+                self._save_position(symbol)
 
     def _maybe_enter(self, symbol: str, sig: Optional[str], last_price: float):
         strat = self.strategies[symbol]
@@ -136,7 +244,10 @@ class BotRunner:
                     self.ex.create_market_order(symbol, "buy", pos.qty, reduce_only=True)
                     self.notifier.trade_close(symbol, "short", pos.qty, last_price, "señal contraria")
                     logger.info(f"[{symbol}] Cerramos short por señal contraria a {last_price}")
+                    # Save trade record before closing
+                    self._save_trade_record(symbol, "short", pos.qty, pos.entry_price, last_price, pos.entry_time, "signal-change")
                     pos.close()
+                    self._save_position(symbol)
             else:
                 qty = compute_futures_order_qty_usdt(self.cfg.max_notional_usdt, last_price, self.cfg.leverage, amt_dec)
                 if qty > 0:
@@ -145,6 +256,7 @@ class BotRunner:
                     tp = round(entry * (1 + self.cfg.tp_pct), prc_dec)
                     sl = round(entry * (1 - self.cfg.sl_pct), prc_dec)
                     pos.open("long", entry, qty, tp, sl)
+                    self._save_position(symbol)
                     self.notifier.trade_open(symbol, "long", qty, entry, tp, sl)
                     logger.info(f"[{symbol}] Abrimos long: qty={qty} entry={entry} tp={tp} sl={sl}")
 
@@ -154,7 +266,10 @@ class BotRunner:
                     self.ex.create_market_order(symbol, "sell", pos.qty, reduce_only=True)
                     self.notifier.trade_close(symbol, "long", pos.qty, last_price, "señal contraria")
                     logger.info(f"[{symbol}] Cerramos long por señal contraria a {last_price}")
+                    # Save trade record before closing
+                    self._save_trade_record(symbol, "long", pos.qty, pos.entry_price, last_price, pos.entry_time, "signal-change")
                     pos.close()
+                    self._save_position(symbol)
             else:
                 qty = compute_futures_order_qty_usdt(self.cfg.max_notional_usdt, last_price, self.cfg.leverage, amt_dec)
                 if qty > 0:
@@ -163,6 +278,7 @@ class BotRunner:
                     tp = round(entry * (1 - self.cfg.tp_pct), prc_dec)
                     sl = round(entry * (1 + self.cfg.sl_pct), prc_dec)
                     pos.open("short", entry, qty, tp, sl)
+                    self._save_position(symbol)
                     self.notifier.trade_open(symbol, "short", qty, entry, tp, sl)
                     logger.info(f"[{symbol}] Abrimos short: qty={qty} entry={entry} tp={tp} sl={sl}")
 

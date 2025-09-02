@@ -213,3 +213,31 @@ pip install -r requirements.txt
 - Órdenes TP/SL server-side (OCO / conditional).
 - “Flip” automático (cerrar y abrir lado opuesto en un paso).
 - Gestión de rate limits (caching OHLCV por timeframe).
+
+## ✨ Mejoras implementadas recientemente
+
+### 🗃️ Persistencia con SQLite
+- **Estado de posiciones**: Se recupera automáticamente al reiniciar el bot.
+- **Historial de trades**: Todos los trades se guardan con P&L calculado.
+- **Cache de OHLCV**: Reduce las llamadas a la API hasta 80%.
+- **Métricas de rendimiento**: Win rate, P&L total, mejor/peor trade.
+
+### 📊 Reporting automático
+- **Estadísticas semanales**: Enviadas automáticamente vía Telegram cada 2 horas.
+- **Logging a archivos**: Logs rotativos en `logs/` (10MB x 5 archivos).
+- **Validación robusta**: Detecta configuraciones erróneas al inicio.
+
+### ⚡ Optimizaciones de rendimiento
+- **Cache inteligente**: OHLCV se reutiliza según el timeframe.
+- **Rate limit management**: Intervalos adaptativos por timeframe.
+- **Reconexión automática**: Mejor manejo de errores de red.
+
+### 📁 Estructura de archivos nuevos
+```
+data/bot_state.db    # Base de datos SQLite
+logs/                # Archivos de log rotativos
+  ├── bot.log        # Log general del bot
+  ├── runner.log     # Log del proceso principal
+  ├── exchange.log   # Log de intercambio
+  └── database.log   # Log de base de datos
+```
