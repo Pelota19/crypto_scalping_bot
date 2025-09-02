@@ -1,0 +1,8 @@
+{
+  "symbol": "ETH/USDT",
+  "timeframe": "5m",
+  "order_amount": 0.01,
+  "sma_short_window": 10,
+  "sma_long_window": 25,
+  "loop_sleep_time_seconds": 60
+}
