@@ -1,0 +1,1 @@
+{"exchange":"bybit","network":"testnet","symbols":["BTC/USDT"],"timeframe":"1m","risk":{"max_position_size_pct":1.0,"stop_loss_pct":0.3,"take_profit_pct":0.6},"strategy":{"name":"scalping_v1","params":{"rsi_period":14,"rsi_overbought":70,"rsi_oversold":30}},"telegram":{"enabled":true},"logging":{"level":"INFO"}}
