@@ -7,3 +7,10 @@ __pycache__/
 
 # Archivos de log
 *.log
+
+# Virtual environment
+.venv/
+
+# Runtime files
+.run/
+logs/

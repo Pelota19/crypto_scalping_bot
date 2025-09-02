@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Optional, Dict, Tuple
 
-from .config import Config
+from .settings import Config
 from .exchange import ExchangeClient
 from .logger import get_logger
 from .notifier import Notifier

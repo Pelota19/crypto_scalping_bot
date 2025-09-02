@@ -174,7 +174,7 @@ pip install -r requirements.txt
 
 ## Estructura del proyecto (resumen)
 
-- `bot/config.py`: carga variables de entorno y construye la configuración.
+- `bot/settings.py`: carga variables de entorno y construye la configuración.
 - `bot/exchange.py`: cliente de exchange (Bybit), gestión de modo testnet, leverage, margin/position mode, órdenes market y precisiones.
 - `bot/risk.py`: cálculo de tamaño de orden con redondeo a la precisión.
 - `bot/strategy.py`: estrategia SMA (señales buy/sell).

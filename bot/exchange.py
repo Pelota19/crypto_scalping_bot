@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Tuple
 import ccxt
 
 from .logger import get_logger
-from .config import Config
+from .settings import Config
 
 logger = get_logger("exchange")
 
